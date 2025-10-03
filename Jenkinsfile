@@ -1,10 +1,16 @@
 pipeline {
     agent any
+
     stages {
-        stage('Test SSH') {
+        stage('Build') {
             steps {
-                sh 'echo "Connexion SSH Jenkins-GitHub OK"'
-                sh 'git --version'
+                echo "Building the demo app..."
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo "Running tests for demo app..."
             }
         }
     }

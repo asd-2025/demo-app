@@ -5,16 +5,15 @@ pipeline {
 
     stage('Checkout') {
       steps {
-        // Retrieve the source code from the connected SCM (GitHub)
+        // Retrieve code and show short SHA for traceability
         checkout scm
-        // Display the current short commit SHA for traceability
         sh 'git rev-parse --short HEAD'
       }
     }
 
     stage('Docker sanity') {
       steps {
-        // Check if Docker is installed and running properly
+        // Ensure Docker is available
         sh 'docker --version'
       }
     }
@@ -22,13 +21,13 @@ pipeline {
     stage('Build Docker image') {
       when {
         expression {
-          // Only attempt to build if a Dockerfile exists in the repo
+          // Build only if Dockerfile exists
           return fileExists('Dockerfile')
         }
       }
       steps {
         script {
-          // Generate a short SHA tag for version tracking
+          // Create a local tag based on short SHA
           def shortSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
           env.IMAGE_NAME = "demo-app"
           env.IMAGE_TAG  = "local-${shortSha}"
@@ -43,22 +42,31 @@ pipeline {
     stage('Tag for GHCR') {
       steps {
         script {
-          // Generate same SHA for consistent tagging
+          // Compute GHCR tag using the same short SHA
           def shortSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-
-          // Define registry and owner (organization or user)
           env.REGISTRY   = 'ghcr.io'
-          env.OWNER      = 'asd-2025'     // Change to 'ben-edu' if needed
+          env.OWNER      = 'asd-2025'     // change to 'ben-edu' if you prefer under your user
           env.IMAGE_NAME = 'demo-app'
           env.GHCR_TAG   = "${env.REGISTRY}/${env.OWNER}/${env.IMAGE_NAME}:${shortSha}"
         }
-
         sh '''
-          echo "Retagging local image to: ${GHCR_TAG}"
+          echo "Retagging to: ${GHCR_TAG}"
           docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${GHCR_TAG}
-          echo "Verifying the new tag:"
           docker image ls ${GHCR_TAG}
         '''
+      }
+    }
+
+    stage('Push to GHCR') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'ghcr-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
+          sh '''
+            set -e
+            echo "$GH_PAT" | docker login ghcr.io -u "$GH_USER" --password-stdin
+            docker push ${GHCR_TAG}
+            docker logout ghcr.io
+          '''
+        }
       }
     }
 

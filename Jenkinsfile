@@ -5,7 +5,7 @@ pipeline {
 
     stage('Checkout') {
       steps {
-        // Retrieve code and show short SHA for traceability
+        // Get source code and show short SHA for traceability
         checkout scm
         sh 'git rev-parse --short HEAD'
       }
@@ -13,7 +13,7 @@ pipeline {
 
     stage('Docker sanity') {
       steps {
-        // Ensure Docker is available
+        // Ensure Docker CLI is available
         sh 'docker --version'
       }
     }
@@ -21,7 +21,7 @@ pipeline {
     stage('Build Docker image') {
       when {
         expression {
-          // Build only if Dockerfile exists
+          // Build only if a Dockerfile exists
           return fileExists('Dockerfile')
         }
       }
@@ -44,8 +44,10 @@ pipeline {
         script {
           // Compute GHCR tag using the same short SHA
           def shortSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+
+          // Registry + owner (HERE we force OWNER to ben-edu)
           env.REGISTRY   = 'ghcr.io'
-          env.OWNER      = 'asd-2025'     // change to 'ben-edu' if you prefer under your user
+          env.OWNER      = 'ben-edu'     // <- keep this for now
           env.IMAGE_NAME = 'demo-app'
           env.GHCR_TAG   = "${env.REGISTRY}/${env.OWNER}/${env.IMAGE_NAME}:${shortSha}"
         }
@@ -59,6 +61,7 @@ pipeline {
 
     stage('Push to GHCR') {
       steps {
+        // Use Jenkins credentials (ID: ghcr-pat) — Username must be 'ben-edu', Password is the PAT
         withCredentials([usernamePassword(credentialsId: 'ghcr-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
           sh '''
             set -e

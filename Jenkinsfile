@@ -1,82 +1,67 @@
 pipeline {
   agent any
-
+  parameters {
+    string(name: 'REGISTRY',   defaultValue: 'ghcr.io',  description: 'Container registry host')
+    string(name: 'OWNER',      defaultValue: 'ben-edu',  description: 'Owner/namespace in registry')
+    string(name: 'IMAGE_NAME', defaultValue: 'demo-app', description: 'Image name')
+    booleanParam(name: 'PUSH',       defaultValue: true,  description: 'Push image to registry')
+    booleanParam(name: 'TAG_LATEST', defaultValue: false, description: 'Also tag & push :latest')
+    string(name: 'EXTRA_TAG',  defaultValue: '',         description: 'Optional extra tag (e.g. preprod)')
+  }
+  environment { LOCAL_TAG = "local-${env.BUILD_NUMBER}" }
   stages {
-
     stage('Checkout') {
       steps {
-        // Get source code and show short SHA for traceability
         checkout scm
-        sh 'git rev-parse --short HEAD'
+        sh 'echo "✅ Checked out $(git rev-parse --short HEAD)"'
       }
     }
-
-    stage('Docker sanity') {
+    stage('Docker sanity') { steps { sh 'docker --version' } }
+    stage('Build image') {
       steps {
-        // Ensure Docker CLI is available
-        sh 'docker --version'
-      }
-    }
-
-    stage('Build Docker image') {
-      when {
-        expression {
-          // Build only if a Dockerfile exists
-          return fileExists('Dockerfile')
-        }
-      }
-      steps {
-        script {
-          // Create a local tag based on short SHA
-          def shortSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-          env.IMAGE_NAME = "demo-app"
-          env.IMAGE_TAG  = "local-${shortSha}"
-        }
+        script { env.SHORT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim() }
         sh '''
-          echo "Building image: ${IMAGE_NAME}:${IMAGE_TAG}"
-          docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+          echo "🧱 Building: ${IMAGE_NAME}:${LOCAL_TAG}"
+          docker build -t ${IMAGE_NAME}:${LOCAL_TAG} .
         '''
       }
     }
-
-    stage('Tag for GHCR') {
+    stage('Tag for registry') {
       steps {
-        script {
-          // Compute GHCR tag using the same short SHA
-          def shortSha = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-
-          // Registry + owner (HERE we force OWNER to ben-edu)
-          env.REGISTRY   = 'ghcr.io'
-          env.OWNER      = 'ben-edu'     // <- keep this for now
-          env.IMAGE_NAME = 'demo-app'
-          env.GHCR_TAG   = "${env.REGISTRY}/${env.OWNER}/${env.IMAGE_NAME}:${shortSha}"
-        }
+        script { env.GHCR_TAG = "${params.REGISTRY}/${params.OWNER}/${params.IMAGE_NAME}:${env.SHORT_SHA}" }
         sh '''
-          echo "Retagging to: ${GHCR_TAG}"
-          docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${GHCR_TAG}
+          echo "🏷  Retag to: ${GHCR_TAG}"
+          docker tag ${IMAGE_NAME}:${LOCAL_TAG} ${GHCR_TAG}
           docker image ls ${GHCR_TAG}
         '''
+        script {
+          if (params.EXTRA_TAG?.trim()) {
+            env.EXTRA_FULL = "${params.REGISTRY}/${params.OWNER}/${params.IMAGE_NAME}:${params.EXTRA_TAG.trim()}"
+            sh 'docker tag ${IMAGE_NAME}:${LOCAL_TAG} ${EXTRA_FULL}'
+          }
+          if (params.TAG_LATEST) {
+            env.LATEST_FULL = "${params.REGISTRY}/${params.OWNER}/${params.IMAGE_NAME}:latest"
+            sh 'docker tag ${IMAGE_NAME}:${LOCAL_TAG} ${LATEST_FULL}'
+          }
+        }
       }
     }
-
-    stage('Push to GHCR') {
+    stage('Push (optional)') {
+      when { expression { return params.PUSH } }
       steps {
-        // Use Jenkins credentials (ID: ghcr-pat) — Username must be 'ben-edu', Password is the PAT
         withCredentials([usernamePassword(credentialsId: 'ghcr-pat', usernameVariable: 'GH_USER', passwordVariable: 'GH_PAT')]) {
           sh '''
             set -e
-            echo "$GH_PAT" | docker login ghcr.io -u "$GH_USER" --password-stdin
+            echo "$GH_PAT" | docker login ${REGISTRY} -u "$GH_USER" --password-stdin
             docker push ${GHCR_TAG}
-            docker logout ghcr.io
+            [ -n "${EXTRA_FULL:-}" ]  && docker push ${EXTRA_FULL}  || true
+            [ -n "${LATEST_FULL:-}" ] && docker push ${LATEST_FULL} || true
+            docker logout ${REGISTRY} || true
           '''
         }
       }
     }
-
-    stage('Test') {
-      steps {
-        echo "Running tests for demo app... (placeholder)"
-      }
-    }
+    stage('Test') { steps { echo 'Placeholder tests…' } }
   }
+  post { always { sh 'docker image prune -f || true' } }
 }
